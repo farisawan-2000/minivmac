@@ -1,0 +1,54 @@
+# edited
+ROM_NAME=minivmac
+BUILD_DIR=build
+
+mk_COptionsCommon = -c -DWantOSGLUN64 -Wall -Wmissing-prototypes -Wno-uninitialized -Wundef -Wstrict-prototypes -Icfg/ -Isrc/
+mk_COptionsOSGLU = $(mk_COptionsCommon) -Os
+mk_CSuppressWarn = -Wno-unused-function -Wno-unused-variable
+mk_COptions = $(mk_COptionsCommon) -Os $(mk_CSuppressWarn)
+
+.PHONY: all clean
+
+all : $(BUILD_DIR)/minivmac.z64
+
+include $(N64_INST)/include/n64.mk
+N64_CFLAGS += $(INCLUDES) $(mk_COptions)
+N64_CFLAGS += -Wno-missing-braces
+N64_CFLAGS += -Wno-int-conversion
+
+ObjFiles = \
+	$(BUILD_DIR)/MINEM68K.o \
+	$(BUILD_DIR)/GLOBGLUE.o \
+	$(BUILD_DIR)/M68KITAB.o \
+	$(BUILD_DIR)/VIAEMDEV.o \
+	$(BUILD_DIR)/VIA2EMDV.o \
+	$(BUILD_DIR)/IWMEMDEV.o \
+	$(BUILD_DIR)/SCCEMDEV.o \
+	$(BUILD_DIR)/RTCEMDEV.o \
+	$(BUILD_DIR)/ROMEMDEV.o \
+	$(BUILD_DIR)/SCSIEMDV.o \
+	$(BUILD_DIR)/SONYEMDV.o \
+	$(BUILD_DIR)/SCRNEMDV.o \
+	$(BUILD_DIR)/VIDEMDEV.o \
+	$(BUILD_DIR)/MOUSEMDV.o \
+	$(BUILD_DIR)/ADBEMDEV.o \
+	$(BUILD_DIR)/ASCEMDEV.o \
+	$(BUILD_DIR)/PROGMAIN.o \
+	$(BUILD_DIR)/OSGLUN64.o
+
+
+O_FILES = $(ObjFiles)
+
+# todo: add DFS or fatfs libcart
+# $(BUILD_DIR)/$(ROM_NAME).dfs: filesystem/ $(assets_conv)
+$(BUILD_DIR)/$(ROM_NAME).elf: $(O_FILES)
+
+$(ROM_NAME).z64: N64_ROM_TITLE="minivmac"
+$(ROM_NAME).z64: $(BUILD_DIR)/$(ROM_NAME).elf
+
+clean:
+	rm -rf filesystem/ $(BUILD_DIR) $(ROM_NAME).z64
+
+.PHONY: all clean
+
+print-% : ; $(info $* is a $(flavor $*) variable set to [$($*)]) @true

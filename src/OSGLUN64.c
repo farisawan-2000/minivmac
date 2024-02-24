@@ -25,6 +25,7 @@
 #ifdef WantOSGLUN64
 
 #include <libdragon.h>
+#include <time.h>
 #include "N64TYPES.h"
 
 #define CONSOLE_TRACE() \
@@ -42,17 +43,21 @@ GLOBALOSGLUPROC MyMoveBytes(anyp srcPtr, anyp destPtr, si5b byteCount)
 */
 #define N64_ScreenWidth 640
 #define N64_ScreenHeight 480
+static surface_t zbuffer;
+#define NOKEY 0
 
 LOCALVAR volatile int VBlankCounter = 0;
 LOCALVAR volatile int HBlankCounter = 0;
 LOCALVAR volatile unsigned int TimerBaseMSec = 0;
-LOCALVAR Keyboard* DSKeyboard = NULL;
-LOCALVAR volatile int LastKeyboardKey = NOKEY;
-LOCALVAR volatile int KeyboardKey = NOKEY;
-LOCALVAR struct controller_data __attribute__((aligned(8))) KeysHeld = {0};
+LOCALVAR joypad_inputs_t __attribute__((aligned(8))) LastKeyboardKey = {0};
+LOCALVAR joypad_inputs_t __attribute__((aligned(8))) KeyboardKey = {0};
+LOCALVAR joypad_inputs_t __attribute__((aligned(8))) KeysHeld = {0};
 LOCALVAR volatile int CursorX = 0;
 LOCALVAR volatile int CursorY = 0;
 LOCALVAR int Display_bg2_Main = 0;
+
+// todo: adpcm AI buffer etc
+LOCALVAR volatile tpSoundSamp TheSoundBuffer = 0;
 
 /* --- control mode and internationalization --- */
 
@@ -541,13 +546,13 @@ LOCALPROC CheckMouseState(void)
 		- Handle touchscreen input (trackpad style mouse motion)
 	*/
 
-	MotionX = KeysHeld.c[0].x;
-	MotionY = KeysHeld.c[0].y;
+	MotionX = KeysHeld.stick_x;
+	MotionY = KeysHeld.stick_y;
 
 	HaveMouseMotion = trueblnr;
 
 	MyMousePositionSetDelta(MotionX, MotionY);
-	MyMouseButtonSet(KeysHeld.c[0].a);
+	MyMouseButtonSet(KeysHeld.btn.a);
 }
 
 /* --- keyboard input --- */
@@ -628,10 +633,11 @@ LOCALFUNC blnr KC2MKCInit(void)
 	AssignKeyToMKC('>', '.', MKC_Period);
 	AssignKeyToMKC('?', '/', MKC_formac_Slash);
 
-	AssignKeyToMKC(NOKEY, DVK_SPACE, MKC_Space);
-	AssignKeyToMKC(NOKEY, DVK_BACKSPACE, MKC_BackSpace);
-	AssignKeyToMKC(NOKEY, DVK_ENTER, MKC_formac_Enter);
-	AssignKeyToMKC(NOKEY, DVK_TAB, MKC_Tab);
+	// wtf is this...
+	// AssignKeyToMKC(NOKEY, DVK_SPACE, MKC_Space);
+	// AssignKeyToMKC(NOKEY, DVK_BACKSPACE, MKC_BackSpace);
+	// AssignKeyToMKC(NOKEY, DVK_ENTER, MKC_formac_Enter);
+	// AssignKeyToMKC(NOKEY, DVK_TAB, MKC_Tab);
 
 	InitKeyCodes();
 
@@ -666,50 +672,24 @@ LOCALPROC DoKeyCode(int i, blnr down)
 LOCALVAR blnr N64_Keystate_Menu = falseblnr;
 LOCALVAR blnr N64_Keystate_Shift = falseblnr;
 
-LOCALPROC N64_HandleKey(si5b Key, blnr Down)
+LOCALPROC N64_HandleKey(joypad_inputs_t Key, blnr Down)
 {
-	if (Key == NOKEY) {
+	if (Key.btn.raw == NOKEY) {
 		return;
 	}
 
-	switch (Key) {
-		case DVK_UP:
-			Keyboard_UpdateKeyMap2(MKC_Up, Down);
-			break;
-
-		case DVK_DOWN:
-			Keyboard_UpdateKeyMap2(MKC_Down, Down);
-			break;
-
-		case DVK_LEFT:
-			Keyboard_UpdateKeyMap2(MKC_Left, Down);
-			break;
-
-		case DVK_RIGHT:
-			Keyboard_UpdateKeyMap2(MKC_Right, Down);
-			break;
-
-		case DVK_SHIFT:
-			Keyboard_UpdateKeyMap2(MKC_formac_Shift, trueblnr);
-			break;
-
-		default:
-			if (Key > 0) {
-				DoKeyCode(Key, Down);
-				Keyboard_UpdateKeyMap2(MKC_formac_Shift, falseblnr);
-			}
-			break;
-	}
+	// Keyboard_UpdateKeyMap2(key, falseblnr); always
+	// DoKeyCode(key, Down); also if normal key
 }
 
 LOCALPROC N64_HandleKeyboard(void)
 {
 	LastKeyboardKey = KeyboardKey;
-	KeyboardKey = keyboardUpdate();
+	KeyboardKey = joypad_get_inputs(JOYPAD_PORT_1);
 
-	if ((KeyboardKey == NOKEY) && (LastKeyboardKey != NOKEY)) {
+	if ((KeyboardKey.btn.raw == NOKEY) && (LastKeyboardKey.btn.raw != NOKEY)) {
 		N64_HandleKey(LastKeyboardKey, falseblnr);
-		LastKeyboardKey = NOKEY;
+		LastKeyboardKey.btn.raw = NOKEY;
 	} else {
 		N64_HandleKey(KeyboardKey, trueblnr);
 		LastKeyboardKey = KeyboardKey;
@@ -742,7 +722,7 @@ LOCALPROC GetCurrentTicks(void)
 	/*
 		HACKHACKHACK
 	*/
-	t.tv_usec = TimerBaseMSec + TIMER1_DATA;
+	t.tv_usec = TimerBaseMSec + get_ticks();
 	t.tv_usec = t.tv_usec * 1000;
 
 	if (! HaveTimeDelta) {
@@ -1111,7 +1091,7 @@ LOCALPROC N64_VBlank_IRQ(void)
 {
 	scanKeys();
 
-	KeysHeld = joypad_get_buttons_held();
+	KeysHeld.btn = joypad_get_buttons_held(JOYPAD_PORT_1);
 
 	if (++VBlankCounter == 60) {
 		VBlankCounter = 0;
@@ -1119,19 +1099,19 @@ LOCALPROC N64_VBlank_IRQ(void)
 
 	/*
 		TODO:
-		Rewrite this at some point, I'm not sure I like it.
-	*/
-	if (0 != (KeysHeld & KEY_LEFT)) {
-		--CursorX;
-	} else if (0 != (KeysHeld & KEY_RIGHT)) {
-		++CursorX;
-	}
+		n64 stick to cursor
+	// */
+	// if (0 != (KeysHeld & KEY_LEFT)) {
+	// 	--CursorX;
+	// } else if (0 != (KeysHeld & KEY_RIGHT)) {
+	// 	++CursorX;
+	// }
 
-	if (0 != (KeysHeld & KEY_UP)) {
-		--CursorY;
-	} else if (0 != (KeysHeld & KEY_DOWN)) {
-		++CursorY;
-	}
+	// if (0 != (KeysHeld & KEY_UP)) {
+	// 	--CursorY;
+	// } else if (0 != (KeysHeld & KEY_DOWN)) {
+	// 	++CursorY;
+	// }
 
 	CursorX = CursorX < 0 ? 0 : CursorX;
 	CursorX = CursorX > vMacScreenWidth ? vMacScreenWidth : CursorX;

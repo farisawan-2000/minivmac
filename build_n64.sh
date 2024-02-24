@@ -26,7 +26,7 @@ fi
         -e bgc \
         -t port \
         -m II \
-        -hres 320 -vres 240 > setup.sh
+        -hres 320 -vres 240 -sound 0 > setup.sh
 
 # generate makefile and build
 bash -x ./setup.sh
